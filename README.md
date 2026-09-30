@@ -43,7 +43,7 @@ cp .env.example .env
 ### 2. 启动服务
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 六个容器会自动启动：`postgres`、`pgbouncer`、`redis`、`api`、`frontend`（Nginx）、`postfix`。
@@ -315,10 +315,11 @@ tempmail/
 │   ├── middleware/        # 鉴权、速率限制
 │   ├── model/            # 数据结构
 │   └── store/            # 数据库操作
-├── frontend/             # 静态 SPA（Nginx 托管）
-│   ├── index.html
-│   ├── css/style.css
-│   └── js/app.js
+├── frontend/             # Vue 3 + Vite 前端（构建后由 Nginx 托管）
+│   ├── src/views/        # 页面：看板、邮箱、收件箱、域名、API 文档、管理后台
+│   ├── src/components/   # 组件
+│   ├── src/docs/         # API 文档数据源
+│   └── Dockerfile        # 多阶段构建：node 编译 → nginx 托管
 ├── nginx/                # Nginx 反向代理配置
 ├── postfix/              # Postfix 邮件接收
 ├── pgbouncer/            # PgBouncer 连接池配置
@@ -327,6 +328,23 @@ tempmail/
 ├── docker-compose.yml
 └── .env                  # 敏感配置（已 gitignore，不含硬编码 IP）
 ```
+
+---
+
+## 前端开发
+
+前端位于 `frontend/`，使用 Vue 3 + Vite，需 Node.js 20.19+。
+
+```bash
+cd frontend
+npm ci
+npm run dev          # http://localhost:5173，/api 与 /public 代理到 localhost:8080
+# 后端不在本机时：VITE_API_TARGET=http://<服务器IP>:8080 npm run dev
+npm run build        # 产物输出到 frontend/dist
+```
+
+`docker compose up -d --build` 会在镜像构建阶段自动编译前端，无需在宿主机安装 Node.js。
+修改前端代码后需重新执行 `docker compose up -d --build frontend`。
 
 ---
 
