@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test tests/verification.test.js",
+    "test:browser": "node tests/run-browser.js",
     "preview": "vite preview"
   },
   "dependencies": {

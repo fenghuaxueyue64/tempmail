@@ -122,7 +122,7 @@ services:
 
   # ==================== Go API 服务 ====================
   api:
-    image: ghcr.io/${DOCKER_IMAGE_NAMESPACE:-123nhh}/tempmail-api:${DOCKER_IMAGE_TAG:-latest}
+    image: ghcr.io/${DOCKER_IMAGE_NAMESPACE:-fenghuaxueyue64}/tempmail-api:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: ./api
     restart: unless-stopped
@@ -167,7 +167,7 @@ services:
   # ==================== 前端 Nginx ====================
   # Vue 前端在镜像构建时编译（frontend/Dockerfile），Nginx 配置仍从宿主机挂载
   frontend:
-    image: tempmail-frontend:local
+    image: ghcr.io/${DOCKER_IMAGE_NAMESPACE:-fenghuaxueyue64}/tempmail-frontend:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -183,7 +183,7 @@ services:
 
   # ==================== Postfix 收件服务 ====================
   postfix:
-    image: ghcr.io/${DOCKER_IMAGE_NAMESPACE:-123nhh}/tempmail-postfix:${DOCKER_IMAGE_TAG:-latest}
+    image: ghcr.io/${DOCKER_IMAGE_NAMESPACE:-fenghuaxueyue64}/tempmail-postfix:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: postfix/Dockerfile

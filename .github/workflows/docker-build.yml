@@ -5,19 +5,64 @@ on:
     branches:
       - main
       - master
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  test:
+    name: Mail regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: |
+            api/go.sum
+            postfix/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test MIME receiver
+        working-directory: postfix
+        run: go test ./...
+      - name: Test API
+        working-directory: api
+        run: go test ./...
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      - name: Test verification extraction
+        working-directory: frontend
+        run: npm test
+      - name: Test reader in headless Chrome
+        working-directory: frontend
+        run: npm run test:browser
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Validate Compose
+        run: docker compose --env-file .env.example config --quiet
+
   build-and-push:
     name: Build and push ${{ matrix.image }}
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +70,9 @@ jobs:
           - image: tempmail-api
             context: ./api
             dockerfile: ./api/Dockerfile
+          - image: tempmail-frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
           - image: tempmail-postfix
             context: .
             dockerfile: ./postfix/Dockerfile

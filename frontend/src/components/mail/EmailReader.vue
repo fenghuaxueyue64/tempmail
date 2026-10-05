@@ -1,12 +1,14 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowLeft, Trash2, Image as ImageIcon, ImageOff, KeyRound, FileText, Code, Paperclip } from '@lucide/vue'
+import { ArrowLeft, Trash2, Image as ImageIcon, ImageOff, KeyRound, Link, FileText, Code, Paperclip } from '@lucide/vue'
 import CopyButton from '../ui/CopyButton.vue'
 import EmptyState from '../ui/EmptyState.vue'
 import { api } from '../../api/client'
 import { toast } from '../../composables/feedback'
 import { bytes, formatFull, initial, senderName } from '../../utils/format'
 import { extractOtp, htmlToText } from '../../utils/otp'
+import { extractMagicLink } from '../../utils/magicLink'
+import { buildMailDocument } from '../../utils/mailDocument'
 
 const props = defineProps({
   mailboxId: { type: String, required: true },
@@ -22,32 +24,40 @@ const view = ref('html')
 const remote = ref(false)
 const frame = ref(null)
 let ro = null
+let fitRequest = 0
+let loadVersion = 0
 
 const html = computed(() => email.value?.body_html || '')
-const text = computed(() => email.value?.body_text || (html.value ? htmlToText(html.value) : ''))
+const text = computed(() => email.value?.body_text?.trim() ? email.value.body_text : (html.value ? htmlToText(html.value) : ''))
 const otp = computed(() => (email.value ? extractOtp({ subject: email.value.subject, text: email.value.body_text, html: html.value }) : null))
-const hasRemote = computed(() => /<img[^>]+src=["']?https?:/i.test(html.value) || /url\(\s*['"]?https?:/i.test(html.value))
+const magicLink = computed(() => email.value ? extractMagicLink({ text: email.value.body_text, html: html.value }) : null)
+const linkHost = computed(() => magicLink.value ? new URL(magicLink.value).host : '')
+const hasRemote = computed(() => /<(?:img|source|video|link)\b[^>]*(?:src|srcset|poster|href)\s*=[^>]*https?:|url\(\s*['"]?https?:/i.test(html.value))
+const srcdoc = computed(() => html.value ? buildMailDocument(html.value, remote.value) : '')
 
-// 以 srcdoc 渲染邮件：禁止脚本，默认阻止远程资源（防追踪像素），链接新窗口打开
-const srcdoc = computed(() => {
-  if (!html.value) return ''
-  const img = remote.value ? "img-src data: cid: https: http:; style-src 'unsafe-inline' https: http:; font-src https: http: data:;" : "img-src data: cid:; style-src 'unsafe-inline'; font-src data:;"
-  const head = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; ${img}"><base target="_blank"><style>html,body{margin:0;padding:16px;font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#1C1917;background:#fff;word-wrap:break-word;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}pre{white-space:pre-wrap}</style>`
-  return `<!doctype html><html><head>${head}</head><body>${html.value}</body></html>`
-})
+function resetFrame() {
+  ro?.disconnect()
+  ro = null
+  cancelAnimationFrame(fitRequest)
+}
 
 async function load() {
+  const version = ++loadVersion
+  resetFrame()
   loading.value = true
+  email.value = null
   error.value = ''
   remote.value = false
   try {
-    email.value = await api.getEmail(props.mailboxId, props.emailId)
-    view.value = email.value.body_html ? 'html' : 'text'
+    const result = await api.getEmail(props.mailboxId, props.emailId)
+    if (version !== loadVersion) return
+    email.value = result
+    view.value = result.body_html ? 'html' : 'text'
   } catch (e) {
-    email.value = null
+    if (version !== loadVersion) return
     error.value = e.status === 404 ? '邮件不存在或已被删除' : e.message
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 
@@ -55,25 +65,29 @@ function fit() {
   const f = frame.value
   if (!f) return
   try {
-    const doc = f.contentDocument
-    if (!doc?.body) return
-    f.style.height = `${Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight) + 4}px`
-    if (!ro && window.ResizeObserver) {
-      ro = new ResizeObserver(() => {
-        try { f.style.height = `${doc.documentElement.scrollHeight + 4}px` } catch { /* 忽略 */ }
-      })
-      ro.observe(doc.body)
-    }
+    const body = f.contentDocument?.body
+    if (!body) return
+    // 不测 documentElement：它至少与 iframe 等高，反复 +4 会无限增高。
+    const height = Math.max(240, Math.ceil(body.getBoundingClientRect().height), body.scrollHeight) + 2
+    if (f.style.height !== `${height}px`) f.style.height = `${height}px`
   } catch {
     f.style.height = '70vh'
   }
 }
 
+function scheduleFit() {
+  cancelAnimationFrame(fitRequest)
+  fitRequest = requestAnimationFrame(fit)
+}
+
 function onLoad() {
-  ro?.disconnect()
-  ro = null
+  resetFrame()
   fit()
-  setTimeout(fit, 300)
+  const body = frame.value?.contentDocument?.body
+  if (body && window.ResizeObserver) {
+    ro = new ResizeObserver(scheduleFit)
+    ro.observe(body)
+  }
 }
 
 async function remove() {
@@ -87,8 +101,11 @@ async function remove() {
 }
 
 watch(() => [props.mailboxId, props.emailId], load, { immediate: true })
-watch(view, async v => { if (v === 'html') { await nextTick(); fit() } })
-onBeforeUnmount(() => ro?.disconnect())
+watch(view, async v => {
+  resetFrame()
+  if (v === 'html') { await nextTick(); fit() }
+})
+onBeforeUnmount(() => { loadVersion++; resetFrame() })
 </script>
 
 <template>
@@ -127,6 +144,16 @@ onBeforeUnmount(() => ro?.disconnect())
           <b>{{ otp }}</b>
         </div>
         <CopyButton :text="otp" label="复制验证码" :toast-text="`已复制验证码 ${otp}`" show-label small />
+      </div>
+
+      <div v-if="magicLink" class="login-link">
+        <Link aria-hidden="true" />
+        <div class="link-t">
+          <span class="small muted">识别到登录 / 验证链接 · {{ linkHost }}</span>
+          <span class="mono link-value">{{ magicLink }}</span>
+          <span class="small muted">链接可能包含一次性凭证，请勿分享；仅在你发起操作时使用。</span>
+        </div>
+        <CopyButton :text="magicLink" label="复制登录链接" toast-text="已复制完整登录链接" show-label small />
       </div>
 
       <div class="body-bar">
@@ -178,6 +205,11 @@ onBeforeUnmount(() => ro?.disconnect())
 .otp-t { display: grid; }
 .otp b { font-family: var(--mono); font-size: 24px; letter-spacing: 0.15em; line-height: 1.2; }
 .otp .btn { margin-left: auto; }
+.login-link { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; padding: 12px 16px; border: 1px dashed var(--fill-edge); border-radius: var(--r-md); background: var(--tint); }
+.login-link > svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
+.link-t { display: grid; gap: 6px; min-width: 0; flex: 1 1 220px; }
+.link-value { overflow-wrap: anywhere; font-size: 13px; }
+.login-link .btn { margin-left: auto; }
 .body-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .blocked { display: flex; align-items: center; gap: 6px; margin-top: -8px; }
 .blocked svg { width: 13px; height: 13px; }

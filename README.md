@@ -13,7 +13,9 @@
 | 邮箱续期 | 到期前一键续期，每次顺延一个有效期，单个邮箱最长存活 24 小时（均可在后台调整）|
 | 到期提醒 | 邮箱剩余不足 5 分钟时弹出提醒，可直接在提醒中续期 |
 | 实时收件 | 收件箱通过 SSE 实时推送新邮件，断线自动回退到轮询 |
-| 验证码识别 | 自动从主题和正文中提取验证码，点击即可复制 |
+| 验证码识别 | 从主题、文本和 HTML 中识别中英文验证码，支持数字、分组码（如 `985-667`）和字母数字混合码，一键复制时去掉分隔符 |
+| 登录链接识别 | 识别 magic link / 邮箱验证链接，一键复制完整 URL（包括 `#` 后的 token），不会自动访问链接 |
+| 邮件正文 | MIME / Base64 / quoted-printable / 常用字符集解码，保留多段正文；HTML 隔离显示，默认阻止远程资源 |
 | 多域名池 | 多个域名轮流供用户创建邮箱，管理员或普通用户均可提交新域名 |
 | MX 自动验证 | 提交域名后后台每 30 秒轮询 MX 记录，通过即自动激活，无需管理员确认 |
 | 域名健康监控 | 每 6 小时重检已激活域名，MX 失效自动暂停（`status=disabled`）|
@@ -41,7 +43,7 @@
 ### 1. 克隆并配置
 
 ```bash
-git clone https://github.com/123nhh/tempmail.git
+git clone https://github.com/fenghuaxueyue64/tempmail.git
 cd tempmail
 cp .env.example .env
 # 编辑 .env，填写 SMTP_SERVER_IP 和 SMTP_HOSTNAME
@@ -81,7 +83,40 @@ git pull
 docker compose up -d --build
 ```
 
-前端改为在镜像构建阶段编译，升级后需要带 `--build` 重新构建。数据库如有未执行的迁移，参考下文「数据库迁移」。
+也可使用 GHCR 预构建镜像，避免在服务器编译前端：
+
+```bash
+# 升级旧部署时，先把 .env 中的 DOCKER_IMAGE_NAMESPACE 改为 fenghuaxueyue64
+# DOCKER_IMAGE_TAG 可设为 latest，或 sha-<7位提交号> 固定三个组件的版本
+# 只拉取本项目组件，不顺便升级数据库等基础镜像
+docker compose pull api frontend postfix
+docker compose up -d --no-build
+```
+
+GitHub Actions 在回归测试通过后发布以下三个镜像（`latest` 与 `sha-<7位提交号>`）：
+
+- `ghcr.io/fenghuaxueyue64/tempmail-api`
+- `ghcr.io/fenghuaxueyue64/tempmail-frontend`
+- `ghcr.io/fenghuaxueyue64/tempmail-postfix`
+
+必须同时更新 **frontend 和 postfix** 才能获得本次提取、展示和收信解码修复。首次发布的 GHCR package 如果尚未开放公开拉取，需要先配置 package 可见性或执行 `docker login ghcr.io`。数据库如有未执行的迁移，参考下文「数据库迁移」。
+
+历史邮件中可读的正文会使用新的前端提取规则；如果旧收信程序已将正文错误解码入库，更新镜像不会自动重写这些记录。解析损坏或超出安全限制的新邮件不会被当作成功入库：LMTP 返回临时失败，由 Postfix 队列保留并按既有策略重试，管理员可查看 postfix 日志排查。
+
+### 邮件回归测试
+
+```bash
+(cd postfix && go test ./...)
+(cd api && go test ./...)
+cd frontend
+npm ci
+npm test
+npm run test:browser
+npm run build
+```
+
+浏览器测试使用本机 Chrome / Edge（也可通过 `CHROME_BIN` 指定可执行文件），自动启动临时 Vite 服务，覆盖 HTML 提取、完整链接复制、长正文、移动端宽度、图片开关、脚本隔离及快速切信。测试只使用合成 token 和本地测试图片，不访问真实认证或追踪链接。API 数据库集成测试需另行配置 `TEST_DATABASE_DSN`，未设置时会跳过。
+
 
 ---
 

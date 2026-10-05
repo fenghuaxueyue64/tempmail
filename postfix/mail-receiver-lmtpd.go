@@ -24,8 +24,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/mail"
@@ -324,9 +322,14 @@ func (s *session) deliverAll(ctx context.Context, raw []byte) {
 	msg, parseErr := mail.ReadMessage(bytes.NewReader(raw))
 	var sender, subject, bodyText, bodyHTML string
 	if parseErr == nil {
-		sender = msg.Header.Get("From")
-		subject = msg.Header.Get("Subject")
-		bodyText, bodyHTML = extractBodies(msg)
+		sender = decodeHeader(msg.Header.Get("From"))
+		subject = decodeHeader(msg.Header.Get("Subject"))
+		bodyText, bodyHTML, parseErr = extractBodies(msg)
+	}
+	if parseErr != nil {
+		log.Printf("mail parse failed: %v", parseErr)
+		s.writeTemporaryFailures(len(s.recipients))
+		return
 	}
 	if sender == "" {
 		sender = s.from
@@ -488,58 +491,4 @@ func readAndDrain(r io.Reader, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	return kept.Bytes(), nil
-}
-
-func extractBodies(msg *mail.Message) (string, string) {
-	mediaType, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
-	if err == nil && strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
-		return extractMultipart(msg.Body, params["boundary"])
-	}
-	body, _ := io.ReadAll(io.LimitReader(msg.Body, maxMessageBytes))
-	if strings.EqualFold(mediaType, "text/html") {
-		return "", string(body)
-	}
-	return string(body), ""
-}
-
-func extractMultipart(r io.Reader, boundary string) (string, string) {
-	if boundary == "" {
-		body, _ := io.ReadAll(io.LimitReader(r, maxMessageBytes))
-		return string(body), ""
-	}
-	var textBody, htmlBody string
-	mr := multipart.NewReader(r, boundary)
-	for {
-		part, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-		mediaType, params, _ := mime.ParseMediaType(part.Header.Get("Content-Type"))
-		mediaType = strings.ToLower(mediaType)
-		if strings.HasPrefix(mediaType, "multipart/") {
-			nt, nh := extractMultipart(part, params["boundary"])
-			if textBody == "" {
-				textBody = nt
-			}
-			if htmlBody == "" {
-				htmlBody = nh
-			}
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(part, maxMessageBytes))
-		switch mediaType {
-		case "text/plain":
-			if textBody == "" {
-				textBody = string(body)
-			}
-		case "text/html":
-			if htmlBody == "" {
-				htmlBody = string(body)
-			}
-		}
-	}
-	return textBody, htmlBody
 }
